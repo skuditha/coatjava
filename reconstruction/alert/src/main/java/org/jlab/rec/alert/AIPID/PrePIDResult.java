@@ -2,13 +2,13 @@ package org.jlab.rec.alert.AIPID;
 
 public class PrePIDResult {
     public final int trackid;
-    public final int clusterid;
+    public final int atofHitId;
     public final int prepid;
     public final float p2212, p45, p46, p47, p49;
 
-    public PrePIDResult(int trackid, int clusterid, int prepid, float p2212, float p45, float p46, float p47, float p49) {
+    public PrePIDResult(int trackid, int atofHitId, int prepid, float p2212, float p45, float p46, float p47, float p49) {
         this.trackid = trackid;
-        this.clusterid = clusterid;
+        this.atofHitId = atofHitId;
         this.prepid = prepid;
         this.p2212 = p2212;
         this.p45 = p45;
