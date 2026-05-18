@@ -11,6 +11,7 @@ import ai.djl.repository.zoo.ModelNotFoundException;
 import ai.djl.repository.zoo.ZooModel;
 import ai.djl.training.util.ProgressBar;
 import ai.djl.translate.TranslateException;
+import ai.djl.translate.Batchifier;
 import ai.djl.translate.Translator;
 import ai.djl.translate.TranslatorContext;
 
@@ -21,45 +22,60 @@ import java.nio.file.Paths;
 import java.util.logging.Logger;
 
 public class ModelPrePID {
-    
+
     static final Logger LOGGER = Logger.getLogger(ModelPrePID.class.getName());
-    // Must match training class order
-    private static final int[] CLASS_IDS = new int[]{2212, 45, 46, 47, 49};
+
+    // Update to match the improved training class order:
+    // proton, deuteron, triton, helium3, helium4.
+    private static final int[] CLASS_IDS = new int[]{2212, 45, 46, 49, 47};
 
     private final ZooModel<float[], float[]> model;
 
     public ModelPrePID() {
 
-        Translator<float[], float[]> my_translator = new Translator<>() {
+        Translator<float[], float[]> translator = new Translator<>() {
 
             @Override
             public NDList processInput(TranslatorContext ctx, float[] floats) {
                 NDManager manager = ctx.getNDManager();
 
-                // IMPORTANT: model expects (batch, 23). Provide (1, 23).
-                NDArray x = manager.create(floats, new Shape(1, 23));
+                // The improved TorchScript PrePID model expects one raw 61-feature row.
+                // Standardization is embedded in the exported model.
+                NDArray x = manager.create(floats, new Shape(1, PrePIDFeatureBuilder.INPUT_SIZE));
                 return new NDList(x);
             }
 
             @Override
+            public Batchifier getBatchifier() {
+                return null;
+            }
+
+            @Override
             public float[] processOutput(TranslatorContext ctx, NDList ndList) {
-                NDArray logits = ndList.get(0);      // (1,5)
-                NDArray probs = logits.softmax(1);   // (1,5)
+                NDArray logits = ndList.get(0);      // (1,5), model class order
+                NDArray probs = logits.softmax(1);   // convert logits to probabilities
 
-                float[] p = probs.toFloatArray();    // length 5 (row-major)
+                float[] p = probs.toFloatArray();    // model order: p, d, t, he3, he4
 
-                // argmax
                 int bestIdx = 0;
                 float best = p[0];
-                for (int k = 1; k < 5; k++) {
-                    if (p[k] > best) { best = p[k]; bestIdx = k; }
+                for (int k = 1; k < p.length; k++) {
+                    if (p[k] > best) {
+                        best = p[k];
+                        bestIdx = k;
+                    }
                 }
                 int prepid = CLASS_IDS[bestIdx];
 
-                // Return: prepid + probabilities in fixed class order
+                // Return the bank order expected by ALERT::ai:prepid:
+                // prepid, p2212, p45, p46, p47, p49.
                 return new float[]{
                     (float) prepid,
-                    p[0], p[1], p[2], p[3], p[4]
+                    p[0], // p2212: proton
+                    p[1], // p45: deuteron
+                    p[2], // p46: triton
+                    p[4], // p47: helium4
+                    p[3]  // p49: helium3
                 };
             }
         };
@@ -73,8 +89,9 @@ public class ModelPrePID {
         Criteria<float[], float[]> criteria = Criteria.builder()
                 .setTypes(float[].class, float[].class)
                 .optModelPath(Paths.get(path))
+                .optModelName("model_PrePID")
                 .optEngine("PyTorch")
-                .optTranslator(my_translator)
+                .optTranslator(translator)
                 .optProgress(new ProgressBar())
                 .build();
 
@@ -89,16 +106,20 @@ public class ModelPrePID {
         return model;
     }
 
-    /** Returns float[]{prepid} where prepid in {2212,45,46,47,49}.
-     * @param features23
-     * @return 
-     * @throws ai.djl.translate.TranslateException */
-    public float[] prediction(float[] features23) throws TranslateException {
-        if (features23 == null || features23.length != 23) {
-            LOGGER.warning("PrePID input must be float[23]");
+    /**
+     * Returns float[]{prepid, p2212, p45, p46, p47, p49}.
+     *
+     * @param features61 raw 61-feature vector in the improved PrePID order
+     * @return PID prediction and probabilities in ALERT::ai:prepid bank order
+     * @throws ai.djl.translate.TranslateException if DJL inference fails
+     */
+    public float[] prediction(float[] features61) throws TranslateException {
+        if (features61 == null || features61.length != PrePIDFeatureBuilder.INPUT_SIZE) {
+            LOGGER.warning("PrePID input must be float[" + PrePIDFeatureBuilder.INPUT_SIZE + "]");
             return null;
         }
-        Predictor<float[], float[]> predictor = model.newPredictor();
-        return predictor.predict(features23);
+        try (Predictor<float[], float[]> predictor = model.newPredictor()) {
+            return predictor.predict(features61);
+        }
     }
 }
