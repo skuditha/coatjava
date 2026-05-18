@@ -11,6 +11,7 @@ import ai.djl.repository.zoo.ModelNotFoundException;
 import ai.djl.repository.zoo.ZooModel;
 import ai.djl.training.util.ProgressBar;
 import ai.djl.translate.TranslateException;
+import ai.djl.translate.Batchifier;
 import ai.djl.translate.Translator;
 import ai.djl.translate.TranslatorContext;
 
@@ -24,6 +25,8 @@ public class ModelPrePID {
 
     static final Logger LOGGER = Logger.getLogger(ModelPrePID.class.getName());
 
+    // Update to match the improved training class order:
+    // proton, deuteron, triton, helium3, helium4.
     private static final int[] CLASS_IDS = new int[]{2212, 45, 46, 49, 47};
 
     private final ZooModel<float[], float[]> model;
@@ -36,8 +39,15 @@ public class ModelPrePID {
             public NDList processInput(TranslatorContext ctx, float[] floats) {
                 NDManager manager = ctx.getNDManager();
 
+                // The improved TorchScript PrePID model expects one raw 61-feature row.
+                // Standardization is embedded in the exported model.
                 NDArray x = manager.create(floats, new Shape(1, PrePIDFeatureBuilder.INPUT_SIZE));
                 return new NDList(x);
+            }
+
+            @Override
+            public Batchifier getBatchifier() {
+                return null;
             }
 
             @Override
@@ -57,6 +67,8 @@ public class ModelPrePID {
                 }
                 int prepid = CLASS_IDS[bestIdx];
 
+                // Return the bank order expected by ALERT::ai:prepid:
+                // prepid, p2212, p45, p46, p47, p49.
                 return new float[]{
                     (float) prepid,
                     p[0], // p2212: proton
