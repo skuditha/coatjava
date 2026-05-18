@@ -103,7 +103,7 @@ public class RecoBankWriter {
         for (int i = 0; i < results.size(); i++) {
             org.jlab.rec.alert.AIPID.PrePIDResult r = results.get(i);
             bank.setInt("trackid", i, r.trackid);
-            bank.setInt("atof_hit_id", i, r.atofHitId);
+            bank.setShort("atof_hit_id", i, (short) r.atofHitId);
             bank.setInt("prepid", i, r.prepid);
             bank.setFloat("p2212", i, r.p2212);
             bank.setFloat("p45", i, r.p45);
