@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.jlab.io.base.DataBank;
 import org.jlab.io.base.DataEvent;
+import org.jlab.rec.alert.AIPID.PostPIDResult;
 import org.jlab.rec.alert.projections.TrackProjection;
 //import org.jlab.rec.alert.AIpid.PIDResult;
 
@@ -111,6 +112,26 @@ public class RecoBankWriter {
             bank.setFloat("p47", i, r.p47);
             bank.setFloat("p49", i, r.p49);
         }
+
+        event.appendBank(bank);
+        return 0;
+    }
+
+    public int appendPostPIDBank(DataEvent event, PostPIDResult result) {
+        DataBank bank = event.createBank("ALERT::ai:pid", 1);
+        if (bank == null) {
+            System.err.println("COULD NOT CREATE AN ALERT::ai:pid BANK!!!!!!");
+            return 1;
+        }
+
+        bank.setInt("trackid", 0, result.trackid);
+        bank.setInt("clusterid", 0, result.clusterid);
+        bank.setInt("pid", 0, result.pid);
+        bank.setFloat("prob_2212", 0, result.prob2212);
+        bank.setFloat("prob_45", 0, result.prob45);
+        bank.setFloat("prob_46", 0, result.prob46);
+        bank.setFloat("prob_47", 0, result.prob47);
+        bank.setFloat("prob_49", 0, result.prob49);
 
         event.appendBank(bank);
         return 0;

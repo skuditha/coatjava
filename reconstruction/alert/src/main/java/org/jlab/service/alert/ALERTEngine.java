@@ -2,6 +2,7 @@ package org.jlab.service.alert;
 
 import ai.djl.translate.TranslateException;
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -23,6 +24,10 @@ import org.jlab.io.base.DataEvent;
 import org.jlab.io.hipo.HipoDataSource;
 import org.jlab.io.hipo.HipoDataSync;
 import org.jlab.rec.alert.TrackMatchingAI.ModelTrackMatching;
+import org.jlab.rec.alert.AIPID.ModelPostPID;
+import org.jlab.rec.alert.AIPID.PostPIDFeatureBuilder;
+import org.jlab.rec.alert.AIPID.PostPIDFeatureBuilder.BuildResult;
+import org.jlab.rec.alert.AIPID.PostPIDResult;
 import org.jlab.rec.alert.AIPID.ModelPrePID;
 import org.jlab.rec.alert.banks.RecoBankWriter;
 import org.jlab.rec.alert.projections.TrackProjector;
@@ -115,6 +120,9 @@ public class ALERTEngine extends ReconstructionEngine {
 
     private ModelTrackMatching modelTrackMatching;
     private ModelPrePID modelPrePID;
+    private ModelPostPID modelPostPID;
+    private PostPIDFeatureBuilder postPIDFeatureBuilder;
+    private boolean postPIDEnabled;
 
     // AHDC track-finding strategy (driven by ALERT.Mode YAML key)
     private TrackFinder trackFinder;
@@ -158,6 +166,24 @@ public class ALERTEngine extends ReconstructionEngine {
 
         modelTrackMatching = new ModelTrackMatching();
         modelPrePID = new ModelPrePID();
+        postPIDFeatureBuilder = new PostPIDFeatureBuilder();
+
+        String postPIDConfig = this.getEngineConfigString("PostPID");
+        postPIDEnabled = postPIDConfig != null && Boolean.parseBoolean(postPIDConfig);
+        if (postPIDEnabled) {
+            String postPIDModelPath = this.getEngineConfigString("PostPIDModelPath");
+            try {
+                if (postPIDModelPath == null || postPIDModelPath.isBlank()) {
+                    modelPostPID = new ModelPostPID();
+                } else {
+                    modelPostPID = new ModelPostPID(Path.of(postPIDModelPath));
+                }
+            } catch (RuntimeException exception) {
+                LOGGER.severe(() ->
+                        "Unable to initialize ALERT PostPID model: " + exception.getMessage());
+                return false;
+            }
+        }
 
         Map<String, Integer> tableMap = new HashMap<>();
         tableMap.put("/calibration/alert/ahdc/gains", 3);
@@ -178,7 +204,7 @@ public class ALERTEngine extends ReconstructionEngine {
                 "AHDC::preclusters", "AHDC::clusters", "AHDC::track",
                 "AHDC::interclusters", "AHDC::docaclusters", "AHDC::ai:prediction",
                 "AHDC::mc", "AHDC::kftrack",
-                "ALERT::projections", "ALERT::ai:projections", "ALERT::prePID");
+                "ALERT::projections", "ALERT::ai:projections", "ALERT::prePID","ALERT::ai:pid");
 
         return true;
     }
@@ -765,15 +791,41 @@ public class ALERTEngine extends ReconstructionEngine {
             AHDC_hits.addAll(track.getHits());
         }     
         DataBank recoKFHitsBank = ahdc_writer.fillAHDCHitsBank(event, AHDC_hits);
-        event.appendBank(recoKFHitsBank); // remark: only  hits assocuated to a track are saved
- 
+         event.appendBank(recoKFHitsBank); // remark: only  hits assocuated to a track are saved
 
-        return true;
+        runPostPID(event);
+         return true;
+     }
+
+    /**
+     * Builds and scores the strict-v2 post-KF PID candidate. Candidate rejection
+     * is expected for events that do not satisfy the frozen association and
+     * feature contract; it does not invalidate the rest of ALERT reconstruction.
+     */
+    private void runPostPID(DataEvent event) {
+        if (!postPIDEnabled || modelPostPID == null) {
+            return;
+        }
+
+        BuildResult buildResult = postPIDFeatureBuilder.build(event);
+        if (!buildResult.isSuccess()) {
+            LOGGER.fine(() -> "PostPID skipped: " + buildResult.getStatus());
+            return;
+        }
+
+        try {
+            PostPIDResult result = modelPostPID.prediction(buildResult.getCandidate());
+            if (rbc.appendPostPIDBank(event, result) != 0) {
+                LOGGER.warning("Unable to append ALERT::ai:pid bank");
+            }
+        } catch (TranslateException | RuntimeException exception) {
+            LOGGER.warning(() -> "Exception in ALERTEngine PostPID: " + exception);
+        }
     }
 
-    /** Extract a deduplicated list of ATOF hits from {@code ATOF::hits} for the
-     *  GNN graph builder. Dedup key is {@code (sector, layer, component)} —
-     *  inference-time variant of the Python dedup which also keys on track id
+     /** Extract a deduplicated list of ATOF hits from {@code ATOF::hits} for the
+      *  GNN graph builder. Dedup key is {@code (sector, layer, component)} —
+      *  inference-time variant of the Python dedup which also keys on track id
      *  (only needed at training time). Returns an empty list when the bank is
      *  absent. */
     private static List<AtofHitStub> extractAtofHits(DataEvent event) {
